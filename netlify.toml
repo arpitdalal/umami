@@ -17,8 +17,9 @@ package = "@netlify/plugin-nextjs"
 #
 # The CONTEXT guard keeps deploy previews and branch deploys read-only: they
 # inherit production DATABASE_URL, so migrating from a preview would advance
-# the production schema while production still runs v2.19.
-command = "pnpm build && if [ \"$CONTEXT\" = \"production\" ]; then pnpm db:migrate; fi"
+# the production schema while production still runs v2.19. Netlify sets
+# CONTEXT to production, deploy-preview, branch-deploy or dev.
+command = "pnpm build && if [ $CONTEXT = production ]; then pnpm db:migrate; fi"
 
 [build.environment]
 NODE_VERSION = "22"
