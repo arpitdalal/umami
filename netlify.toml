@@ -13,20 +13,22 @@ package = "@netlify/plugin-nextjs"
 # `prisma migrate deploy` via check:db before `next build`, and migration 15
 # issues ALTER TABLE "website" DROP COLUMN "share_id" -- so a failed
 # `next build` would leave the database migrated while the previous app is
-# still live, which a redeploy cannot undo.
+# still live, which a redeploy cannot undo. A failed build short-circuits on
+# `&&` and never reaches the migrate step.
 #
 # The CONTEXT guard keeps deploy previews and branch deploys read-only: they
-# inherit production DATABASE_URL, so migrating from a preview would advance
-# the production schema while production still runs v2.19. Netlify sets
-# CONTEXT to production, deploy-preview, branch-deploy or dev.
+# inherit the production DATABASE_URL, so migrating from a preview would
+# advance the production schema while production still runs v2.19. Netlify
+# sets CONTEXT to production, deploy-preview, branch-deploy or dev.
 command = "pnpm build && if [ $CONTEXT = production ]; then pnpm db:migrate; fi"
 
 [build.environment]
 NODE_VERSION = "22"
 PNPM_VERSION = "12.3.4"
-# Keep migrations out of the build's check:db step so a failed `next build`
-# cannot leave the database migrated while the old app is still live.
-# `pnpm db:migrate` above runs them only after the app builds successfully.
-# Migration 15 issues ALTER TABLE "website" DROP COLUMN "share_id", so
-# migrating early is not safely reversible by redeploying.
-SKIP_DB_MIGRATION = "1"
+# Build without touching the database. check-env then stops requiring
+# DATABASE_URL and check-db returns immediately, so a build cannot depend on
+# database reachability or on production credentials -- deploy previews do
+# not need them at all. The only build-time database access left is the
+# explicit `pnpm db:migrate` above, which runs on production deploys only
+# and fails the build (aborting the deploy) if it cannot connect.
+SKIP_DB_CHECK = "1"
