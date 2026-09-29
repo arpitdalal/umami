@@ -1,26 +1,21 @@
+import { StatusLight, Text } from '@umami/react-zen';
 import { useMemo } from 'react';
-import { StatusLight } from 'react-basics';
-import { useApi } from '@/components/hooks';
-import { useMessages } from '@/components/hooks';
-import styles from './ActiveUsers.module.css';
+import Link from '@/components/common/Link';
+import { useActiveUsersQuery, useMessages } from '@/components/hooks';
 
 export function ActiveUsers({
   websiteId,
   value,
   refetchInterval = 60000,
+  allowLink = true,
 }: {
   websiteId: string;
   value?: number;
   refetchInterval?: number;
+  allowLink?: boolean;
 }) {
-  const { formatMessage, messages } = useMessages();
-  const { get, useQuery } = useApi();
-  const { data } = useQuery({
-    queryKey: ['websites:active', websiteId],
-    queryFn: () => get(`/websites/${websiteId}/active`),
-    enabled: !!websiteId,
-    refetchInterval,
-  });
+  const { t, labels } = useMessages();
+  const { data } = useActiveUsersQuery(websiteId, { refetchInterval });
 
   const count = useMemo(() => {
     if (websiteId) {
@@ -34,11 +29,17 @@ export function ActiveUsers({
     return null;
   }
 
-  return (
-    <StatusLight className={styles.container} variant="success">
-      <div className={styles.text}>{formatMessage(messages.activeUsers, { x: count })}</div>
+  const content = (
+    <StatusLight variant="success">
+      <Text size="sm" weight="medium">
+        {count} {t(labels.online)}
+      </Text>
     </StatusLight>
   );
-}
 
-export default ActiveUsers;
+  if (!allowLink) {
+    return content;
+  }
+
+  return <Link href={`/websites/${websiteId}/realtime`}>{content}</Link>;
+}

@@ -3,3 +3,19 @@ included_files = ["node_modules/.geo/**"]
 
 [[plugins]]
 package = "@netlify/plugin-nextjs"
+
+[build]
+# pnpm <12 hard-fails install against engines.pnpm = "12.3.4", and pnpm <12
+# silently ignores the workspace allowBuilds list that unblocks Prisma's
+# postinstall, which leaves the Prisma engine binaries missing at runtime.
+command = "pnpm build && pnpm db:migrate"
+
+[build.environment]
+NODE_VERSION = "22"
+PNPM_VERSION = "12.3.4"
+# Keep migrations out of the build's check:db step so a failed `next build`
+# cannot leave the database migrated while the old app is still live.
+# `pnpm db:migrate` above runs them only after the app builds successfully.
+# Migration 15 issues ALTER TABLE "website" DROP COLUMN "share_id", so
+# migrating early is not safely reversible by redeploying.
+SKIP_DB_MIGRATION = "1"

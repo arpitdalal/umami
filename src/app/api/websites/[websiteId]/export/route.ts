@@ -1,19 +1,16 @@
-import { z } from 'zod';
 import JSZip from 'jszip';
 import Papa from 'papaparse';
-import { getRequestFilters, parseRequest } from '@/lib/request';
-import { unauthorized, json } from '@/lib/response';
-import { canViewWebsite } from '@/lib/auth';
-import { pagingParams } from '@/lib/schema';
-import { getEventMetrics, getPageviewMetrics, getSessionMetrics } from '@/queries';
+import { getQueryFilters, parseRequest } from '@/lib/request';
+import { json, unauthorized } from '@/lib/response';
+import { pagingParams, withDateRange } from '@/lib/schema';
+import { canViewAuthenticatedWebsite } from '@/permissions';
+import { getEventMetrics, getPageviewMetrics, getSessionMetrics } from '@/queries/sql';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ websiteId: string }> },
 ) {
-  const schema = z.object({
-    startAt: z.coerce.number().int(),
-    endAt: z.coerce.number().int(),
+  const schema = withDateRange({
     ...pagingParams,
   });
 
@@ -24,35 +21,47 @@ export async function GET(
   }
 
   const { websiteId } = await params;
-  const { startAt, endAt } = query;
 
-  if (!(await canViewWebsite(auth, websiteId))) {
+  if (!(await canViewAuthenticatedWebsite(auth, websiteId))) {
     return unauthorized();
   }
 
-  const startDate = new Date(+startAt);
-  const endDate = new Date(+endAt);
-
-  const filters = {
-    ...(await getRequestFilters(query)),
-    startDate,
-    endDate,
-  };
+  const filters = await getQueryFilters(query, websiteId);
 
   const [events, pages, referrers, browsers, os, devices, countries] = await Promise.all([
-    getEventMetrics(websiteId, 'event', filters),
-    getPageviewMetrics(websiteId, 'url', filters),
-    getPageviewMetrics(websiteId, 'referrer', filters),
-    getSessionMetrics(websiteId, 'browser', filters),
-    getSessionMetrics(websiteId, 'os', filters),
-    getSessionMetrics(websiteId, 'device', filters),
-    getSessionMetrics(websiteId, 'country', filters),
+    getEventMetrics(websiteId, { type: 'event' }, filters),
+    getPageviewMetrics(websiteId, { type: 'path' }, filters),
+    getPageviewMetrics(websiteId, { type: 'referrer' }, filters),
+    getSessionMetrics(websiteId, { type: 'browser' }, filters),
+    getSessionMetrics(websiteId, { type: 'os' }, filters),
+    getSessionMetrics(websiteId, { type: 'device' }, filters),
+    getSessionMetrics(websiteId, { type: 'country' }, filters),
   ]);
 
   const zip = new JSZip();
 
+  // Prefix cells whose first character is a formula trigger with a single quote
+  // to prevent CSV formula injection when opened in spreadsheet applications.
+  const FORMULA_TRIGGERS = new Set(['=', '+', '-', '@', '\t', '\r']);
+
+  const sanitizeCsvValue = (value: unknown): unknown => {
+    if (typeof value === 'string' && value.length > 0 && FORMULA_TRIGGERS.has(value[0])) {
+      return `'${value}`;
+    }
+    return value;
+  };
+
+  const sanitizeRow = (row: Record<string, unknown>): Record<string, unknown> => {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row)) {
+      sanitized[key] = sanitizeCsvValue(value);
+    }
+    return sanitized;
+  };
+
   const parse = (data: any) => {
-    return Papa.unparse(data, {
+    const sanitized = Array.isArray(data) ? data.map(sanitizeRow) : data;
+    return Papa.unparse(sanitized, {
       header: true,
       skipEmptyLines: true,
     });

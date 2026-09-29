@@ -1,41 +1,55 @@
-import { z } from 'zod';
-import { canCreateTeamWebsite, canCreateWebsite } from '@/lib/auth';
-import { json, unauthorized } from '@/lib/response';
+import { ENTITY_TYPE } from '@/lib/constants';
 import { uuid } from '@/lib/crypto';
-import { parseRequest } from '@/lib/request';
-import { createWebsite, getUserWebsites } from '@/queries';
-import { pagingParams } from '@/lib/schema';
+import { fetchAccount, fetchTeam } from '@/lib/load';
+import { getQueryFilters, parseRequest } from '@/lib/request';
+import { json, unauthorized } from '@/lib/response';
+import { getCloudWebsiteLimit } from '@/lib/subscription';
+import { canCreateTeamWebsite, canCreateWebsite } from '@/permissions';
+import { createShare, createWebsite, getTeamWebsiteCount, getWebsiteCount } from '@/queries/prisma';
+import { getAllUserWebsitesIncludingTeamAccess, getUserWebsites } from '@/queries/prisma/website';
+import { createWebsiteRequestSchema, listWebsitesQuerySchema } from './request-schema';
 
 export async function GET(request: Request) {
-  const schema = z.object({ ...pagingParams });
-
-  const { auth, query, error } = await parseRequest(request, schema);
+  const { auth, query, error } = await parseRequest(request, listWebsitesQuerySchema);
 
   if (error) {
     return error();
   }
 
-  const websites = await getUserWebsites(auth.user.id, query);
+  const userId = auth.user.id;
 
-  return json(websites);
+  const filters = await getQueryFilters(query);
+
+  if (query.includeTeams) {
+    return json(await getAllUserWebsitesIncludingTeamAccess(userId, filters));
+  }
+
+  return json(await getUserWebsites(userId, filters));
 }
 
 export async function POST(request: Request) {
-  const schema = z.object({
-    name: z.string().max(100),
-    domain: z.string().max(500),
-    shareId: z.string().max(50).nullable().optional(),
-    teamId: z.string().nullable().optional(),
-    id: z.string().uuid().nullable().optional(),
-  });
-
-  const { auth, body, error } = await parseRequest(request, schema);
+  const { auth, body, error } = await parseRequest(request, createWebsiteRequestSchema);
 
   if (error) {
     return error();
   }
 
   const { id, name, domain, shareId, teamId } = body;
+
+  if (process.env.CLOUD_MODE) {
+    const account = teamId ? await fetchTeam(teamId) : await fetchAccount(auth.user.id);
+    const websiteLimit = getCloudWebsiteLimit(account);
+
+    if (websiteLimit !== null) {
+      const count = teamId
+        ? await getTeamWebsiteCount(teamId)
+        : await getWebsiteCount(auth.user.id);
+
+      if (count >= websiteLimit) {
+        return unauthorized({ message: 'Website limit reached.' });
+      }
+    }
+  }
 
   if ((teamId && !(await canCreateTeamWebsite(auth, teamId))) || !(await canCreateWebsite(auth))) {
     return unauthorized();
@@ -46,7 +60,6 @@ export async function POST(request: Request) {
     createdBy: auth.user.id,
     name,
     domain,
-    shareId,
     teamId,
   };
 
@@ -56,5 +69,19 @@ export async function POST(request: Request) {
 
   const website = await createWebsite(data);
 
-  return json(website);
+  const share = shareId
+    ? await createShare({
+        id: uuid(),
+        entityId: website.id,
+        shareType: ENTITY_TYPE.website,
+        name: website.name,
+        slug: shareId,
+        parameters: { overview: true, events: true },
+      })
+    : null;
+
+  return json({
+    ...website,
+    shareId: share?.slug ?? null,
+  });
 }

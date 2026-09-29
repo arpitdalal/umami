@@ -1,53 +1,44 @@
-import { Icon, Button, PopupTrigger, Popup } from 'react-basics';
-import classNames from 'classnames';
-import { languages } from '@/lib/lang';
+import { Button, Dialog, DialogTrigger, Grid, Icon, Popover, Text } from '@umami/react-zen';
+import { Globe } from 'lucide-react';
 import { useLocale } from '@/components/hooks';
-import Icons from '@/components/icons';
-import styles from './LanguageButton.module.css';
+import { languages } from '@/lib/lang';
 
 export function LanguageButton() {
-  const { locale, saveLocale, dir } = useLocale();
+  const { locale, saveLocale } = useLocale();
   const items = Object.keys(languages).map(key => ({ ...languages[key], value: key }));
 
-  function handleSelect(value: string, close: () => void, e: MouseEvent) {
-    e.stopPropagation();
+  function handleSelect(value: string, close: () => void) {
     saveLocale(value);
     close();
   }
 
   return (
-    <PopupTrigger>
+    <DialogTrigger key="language">
       <Button variant="quiet">
-        <Icon>
-          <Icons.Globe />
+        <Icon color="primary">
+          <Globe />
         </Icon>
       </Button>
-      <Popup position="bottom" alignment={dir === 'rtl' ? 'start' : 'end'}>
-        {(close: () => void) => {
-          return (
-            <div className={styles.menu}>
+      <Popover side="bottom" align="end">
+        <Dialog>
+          {({ close }) => (
+            <Grid columns="repeat(3, minmax(200px, 1fr))" overflow="hidden">
               {items.map(({ value, label }) => {
                 return (
-                  <div
-                    key={value}
-                    className={classNames(styles.item, { [styles.selected]: value === locale })}
-                    onClick={(e: any) => handleSelect(value, close, e)}
-                  >
-                    <span lang={value}>{label}</span>
-                    {value === locale && (
-                      <Icon className={styles.icon}>
-                        <Icons.Check />
-                      </Icon>
-                    )}
-                  </div>
+                  <Button key={value} variant="quiet" onPress={() => handleSelect(value, close)}>
+                    <Text
+                      weight={value === locale ? 'bold' : 'medium'}
+                      color={value === locale ? undefined : 'muted'}
+                    >
+                      {label}
+                    </Text>
+                  </Button>
                 );
               })}
-            </div>
-          );
-        }}
-      </Popup>
-    </PopupTrigger>
+            </Grid>
+          )}
+        </Dialog>
+      </Popover>
+    </DialogTrigger>
   );
 }
-
-export default LanguageButton;

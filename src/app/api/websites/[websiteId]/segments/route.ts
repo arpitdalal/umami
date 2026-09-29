@@ -1,10 +1,10 @@
-import { canUpdateWebsite, canViewWebsite } from '@/lib/auth';
-import { uuid } from '@/lib/crypto';
-import { parseRequest } from '@/lib/request';
-import { json, unauthorized } from '@/lib/response';
-import { segmentTypeParam } from '@/lib/schema';
-import { createSegment, getWebsiteSegments } from '@/queries';
 import { z } from 'zod';
+import { uuid } from '@/lib/crypto';
+import { getQueryFilters, parseRequest } from '@/lib/request';
+import { badRequest, json, unauthorized } from '@/lib/response';
+import { searchParams, segmentParamSchema, segmentTypeParam } from '@/lib/schema';
+import { canUpdateWebsite, canViewSharedWebsiteFilters } from '@/permissions';
+import { createSegment, getWebsiteSegments } from '@/queries/prisma';
 
 export async function GET(
   request: Request,
@@ -12,6 +12,7 @@ export async function GET(
 ) {
   const schema = z.object({
     type: segmentTypeParam,
+    ...searchParams,
   });
 
   const { auth, query, error } = await parseRequest(request, schema);
@@ -23,11 +24,13 @@ export async function GET(
   const { websiteId } = await params;
   const { type } = query;
 
-  if (websiteId && !(await canViewWebsite(auth, websiteId))) {
+  if (websiteId && !(await canViewSharedWebsiteFilters(auth, websiteId))) {
     return unauthorized();
   }
 
-  const segments = await getWebsiteSegments(websiteId, type);
+  const filters = await getQueryFilters(query);
+
+  const segments = await getWebsiteSegments(websiteId, type, filters);
 
   return json(segments);
 }
@@ -39,7 +42,7 @@ export async function POST(
   const schema = z.object({
     type: segmentTypeParam,
     name: z.string().max(200),
-    parameters: z.object({}).passthrough(),
+    parameters: segmentParamSchema,
   });
 
   const { auth, body, error } = await parseRequest(request, schema);
@@ -50,6 +53,10 @@ export async function POST(
 
   const { websiteId } = await params;
   const { type, name, parameters } = body;
+
+  if (type === 'cohort' && parameters.sessionPropertyFilters?.length) {
+    return badRequest({ message: 'Session property filters are only supported for segments.' });
+  }
 
   if (!(await canUpdateWebsite(auth, websiteId))) {
     return unauthorized();

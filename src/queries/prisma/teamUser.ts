@@ -1,26 +1,35 @@
-import { Prisma, TeamUser } from '@prisma/client';
+import { Prisma, type TeamUser } from '@/generated/prisma/client';
 import { uuid } from '@/lib/crypto';
 import prisma from '@/lib/prisma';
-import { PageResult, PageParams } from '@/lib/types';
+import type { PageResult, QueryFilters } from '@/lib/types';
+
 import TeamUserFindManyArgs = Prisma.TeamUserFindManyArgs;
 
-export async function findTeamUser(criteria: Prisma.TeamUserFindUniqueArgs): Promise<TeamUser> {
+export type TeamUserListItem = TeamUser & {
+  user?: {
+    id: string;
+    username: string;
+  };
+};
+
+export async function findTeamUser(criteria: Prisma.TeamUserFindUniqueArgs) {
   return prisma.client.teamUser.findUnique(criteria);
 }
 
-export async function getTeamUser(teamId: string, userId: string): Promise<TeamUser> {
+export async function getTeamUser(teamId: string, userId: string) {
   return prisma.client.teamUser.findFirst({
     where: {
       teamId,
       userId,
+      team: { deletedAt: null },
     },
   });
 }
 
 export async function getTeamUsers(
   criteria: TeamUserFindManyArgs,
-  filters?: PageParams,
-): Promise<PageResult<TeamUser[]>> {
+  filters?: QueryFilters,
+): Promise<PageResult<TeamUserListItem[]>> {
   const { search } = filters;
 
   const where: Prisma.TeamUserWhereInput = {
@@ -38,11 +47,7 @@ export async function getTeamUsers(
   );
 }
 
-export async function createTeamUser(
-  userId: string,
-  teamId: string,
-  role: string,
-): Promise<TeamUser> {
+export async function createTeamUser(userId: string, teamId: string, role: string) {
   return prisma.client.teamUser.create({
     data: {
       id: uuid(),
@@ -53,10 +58,7 @@ export async function createTeamUser(
   });
 }
 
-export async function updateTeamUser(
-  teamUserId: string,
-  data: Prisma.TeamUserUpdateInput,
-): Promise<TeamUser> {
+export async function updateTeamUser(teamUserId: string, data: Prisma.TeamUserUpdateInput) {
   return prisma.client.teamUser.update({
     where: {
       id: teamUserId,
@@ -65,7 +67,7 @@ export async function updateTeamUser(
   });
 }
 
-export async function deleteTeamUser(teamId: string, userId: string): Promise<Prisma.BatchPayload> {
+export async function deleteTeamUser(teamId: string, userId: string) {
   return prisma.client.teamUser.deleteMany({
     where: {
       teamId,

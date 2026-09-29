@@ -1,60 +1,71 @@
-import useFormat from '@/components//hooks/useFormat';
-import Empty from '@/components/common/Empty';
-import FilterButtons from '@/components/common/FilterButtons';
-import { useCountryNames, useLocale, useMessages, useTimezone } from '@/components/hooks';
-import Icons from '@/components/icons';
+import { Column, Heading, Row, SearchField, Text } from '@umami/react-zen';
+import { useMemo, useState } from 'react';
+import { List, type RowComponentProps } from 'react-window';
+import { SessionModal } from '@/app/(main)/websites/[websiteId]/sessions/SessionModal';
+import { Avatar } from '@/components/common/Avatar';
+import { Empty } from '@/components/common/Empty';
+import { IconLabel } from '@/components/common/IconLabel';
+import Link from '@/components/common/Link';
+import {
+  useCountryNames,
+  useLocale,
+  useMessages,
+  useMobile,
+  useNavigation,
+  useTimezone,
+  useWebsite,
+} from '@/components/hooks';
+import { useFormat } from '@/components/hooks/useFormat';
+import { Eye, User } from '@/components/icons';
+import { FilterButtons } from '@/components/input/FilterButtons';
+import { Lightning } from '@/components/svg';
 import { BROWSERS, OS_NAMES } from '@/lib/constants';
-import { stringToColor } from '@/lib/format';
-import { RealtimeData } from '@/lib/types';
-import { useContext, useMemo, useState } from 'react';
-import { Icon, SearchField, StatusLight, Text } from 'react-basics';
-import { FixedSizeList } from 'react-window';
-import { WebsiteContext } from '../WebsiteProvider';
-import styles from './RealtimeLog.module.css';
 
 const TYPE_ALL = 'all';
 const TYPE_PAGEVIEW = 'pageview';
 const TYPE_SESSION = 'session';
 const TYPE_EVENT = 'event';
+const MAX_LIST_HEIGHT = 500;
+const ROW_HEIGHT = 50;
 
 const icons = {
-  [TYPE_PAGEVIEW]: <Icons.Eye />,
-  [TYPE_SESSION]: <Icons.Visitor />,
-  [TYPE_EVENT]: <Icons.Bolt />,
+  [TYPE_PAGEVIEW]: <Eye />,
+  [TYPE_SESSION]: <User />,
+  [TYPE_EVENT]: <Lightning />,
 };
 
-export function RealtimeLog({ data }: { data: RealtimeData }) {
-  const website = useContext(WebsiteContext);
+export function RealtimeLog({ data }: { data: any }) {
+  const website = useWebsite();
   const [search, setSearch] = useState('');
-  const { formatMessage, labels, messages } = useMessages();
+  const { t, labels, messages } = useMessages();
   const { formatValue } = useFormat();
   const { locale } = useLocale();
   const { formatTimezoneDate } = useTimezone();
   const { countryNames } = useCountryNames(locale);
   const [filter, setFilter] = useState(TYPE_ALL);
+  const { updateParams } = useNavigation();
+  const { isPhone } = useMobile();
 
   const buttons = [
     {
-      label: formatMessage(labels.all),
-      key: TYPE_ALL,
+      label: t(labels.all),
+      id: TYPE_ALL,
     },
     {
-      label: formatMessage(labels.views),
-      key: TYPE_PAGEVIEW,
+      label: t(labels.views),
+      id: TYPE_PAGEVIEW,
     },
     {
-      label: formatMessage(labels.visitors),
-      key: TYPE_SESSION,
+      label: t(labels.visitors),
+      id: TYPE_SESSION,
     },
     {
-      label: formatMessage(labels.events),
-      key: TYPE_EVENT,
+      label: t(labels.events),
+      id: TYPE_EVENT,
     },
   ];
 
   const getTime = ({ createdAt, firstAt }) => formatTimezoneDate(firstAt || createdAt, 'pp');
-
-  const getColor = ({ id, sessionId }) => stringToColor(sessionId || id);
 
   const getIcon = ({ __type }) => icons[__type];
 
@@ -66,21 +77,23 @@ export function RealtimeLog({ data }: { data: RealtimeData }) {
     os: string;
     country: string;
     device: string;
+    hostname: string;
   }) => {
-    const { __type, eventName, urlPath: url, browser, os, country, device } = log;
+    const { __type, eventName, urlPath, browser, os, country, device, hostname } = log;
 
     if (__type === TYPE_EVENT) {
-      return formatMessage(messages.eventLog, {
-        event: <b key="b">{eventName || formatMessage(labels.unknown)}</b>,
-        url: (
+      return t.rich(messages.eventLog, {
+        event: eventName || t(labels.unknown),
+        url: urlPath,
+        b: chunks => <b>{chunks}</b>,
+        a: chunks => (
           <a
-            key="a"
-            href={`//${website?.domain}${url}`}
-            className={styles.link}
+            href={`//${hostname}${urlPath}`}
+            style={{ fontWeight: 'bold' }}
             target="_blank"
             rel="noreferrer noopener"
           >
-            {url}
+            {chunks}
           </a>
         ),
       });
@@ -89,39 +102,43 @@ export function RealtimeLog({ data }: { data: RealtimeData }) {
     if (__type === TYPE_PAGEVIEW) {
       return (
         <a
-          href={`//${website?.domain}${url}`}
-          className={styles.link}
+          href={`//${hostname}${urlPath}`}
+          style={{ fontWeight: 'bold' }}
           target="_blank"
           rel="noreferrer noopener"
         >
-          {url}
+          {urlPath}
         </a>
       );
     }
 
     if (__type === TYPE_SESSION) {
-      return formatMessage(messages.visitorLog, {
-        country: <b key="country">{countryNames[country] || formatMessage(labels.unknown)}</b>,
-        browser: <b key="browser">{BROWSERS[browser]}</b>,
-        os: <b key="os">{OS_NAMES[os] || os}</b>,
-        device: <b key="device">{formatMessage(labels[device] || labels.unknown)}</b>,
+      return t.rich(messages.visitorLog, {
+        country: countryNames[country] || t(labels.unknown),
+        browser: BROWSERS[browser],
+        os: OS_NAMES[os] || os,
+        device: t(labels[device] || labels.unknown),
+        b: chunks => <b>{chunks}</b>,
       });
     }
   };
 
-  const Row = ({ index, style }) => {
+  const TableRow = ({ index, style, logs }: RowComponentProps<{ logs: any[] }>) => {
     const row = logs[index];
     return (
-      <div className={styles.row} style={style}>
-        <div>
-          <StatusLight color={getColor(row)} />
-        </div>
-        <div className={styles.time}>{getTime(row)}</div>
-        <div className={styles.detail}>
-          <Icon className={styles.icon}>{getIcon(row)}</Icon>
-          <Text>{getDetail(row)}</Text>
-        </div>
-      </div>
+      <Row alignItems="center" style={{ ...style, minWidth: 0 }} gap>
+        <Row minWidth="30px">
+          <Link href={updateParams({ session: row.sessionId })}>
+            <Avatar seed={row.sessionId} size={32} />
+          </Link>
+        </Row>
+        <Row minWidth="100px">
+          <Text wrap="nowrap">{getTime(row)}</Text>
+        </Row>
+        <IconLabel icon={getIcon(row)} style={{ minWidth: 0, flex: 1 }}>
+          <Text truncate>{getDetail(row)}</Text>
+        </IconLabel>
+      </Row>
     );
   };
 
@@ -156,23 +173,51 @@ export function RealtimeLog({ data }: { data: RealtimeData }) {
     return logs;
   }, [data, filter, formatValue, search]);
 
+  const listHeight = Math.min(logs.length * ROW_HEIGHT, MAX_LIST_HEIGHT);
+
   return (
-    <div className={styles.table}>
-      <div className={styles.actions}>
-        <SearchField className={styles.search} value={search} onSearch={setSearch} />
-        <FilterButtons items={buttons} selectedKey={filter} onSelect={setFilter} />
-      </div>
-      <div className={styles.header}>{formatMessage(labels.activity)}</div>
-      <div className={styles.body}>
+    <Column gap="3">
+      <Heading size="base">{t(labels.activity)}</Heading>
+      {isPhone ? (
+        <>
+          <Row marginBottom="1">
+            <SearchField
+              value={search}
+              onSearch={setSearch}
+              placeholder={t(labels.search)}
+              className="w-full max-w-md"
+            />
+          </Row>
+          <Row>
+            <FilterButtons items={buttons} value={filter} onChange={setFilter} />
+          </Row>
+        </>
+      ) : (
+        <Row alignItems="center" justifyContent="space-between" gap="4">
+          <SearchField
+            value={search}
+            onSearch={setSearch}
+            placeholder={t(labels.search)}
+            className="w-full max-w-md"
+          />
+          <FilterButtons items={buttons} value={filter} onChange={setFilter} />
+        </Row>
+      )}
+
+      <Column gap="3">
         {logs?.length === 0 && <Empty />}
-        {logs?.length > 0 && (
-          <FixedSizeList width="100%" height={500} itemCount={logs.length} itemSize={50}>
-            {Row}
-          </FixedSizeList>
+        {logs.length > 0 && (
+          <List
+            rowComponent={TableRow}
+            rowCount={logs.length}
+            rowHeight={ROW_HEIGHT}
+            rowProps={{ logs }}
+            defaultHeight={listHeight}
+            style={{ width: '100%', height: listHeight }}
+          />
         )}
-      </div>
-    </div>
+      </Column>
+      <SessionModal websiteId={website.id} />
+    </Column>
   );
 }
-
-export default RealtimeLog;

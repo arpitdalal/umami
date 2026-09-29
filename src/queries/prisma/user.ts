@@ -1,26 +1,39 @@
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import { ROLES } from '@/lib/constants';
+import { getRandomChars } from '@/lib/generate';
 import prisma from '@/lib/prisma';
-import { PageResult, Role, User, PageParams } from '@/lib/types';
-import { getRandomChars } from '@/lib/crypto';
+import redis from '@/lib/redis';
+import { sanitizeSortFilters } from '@/lib/sort';
+import type { PageResult, QueryFilters, Role } from '@/lib/types';
+
 import UserFindManyArgs = Prisma.UserFindManyArgs;
+
+const USER_SORT_FIELDS = ['username', 'role', 'createdAt'] as const;
 
 export interface GetUserOptions {
   includePassword?: boolean;
   showDeleted?: boolean;
 }
 
-async function findUser(
-  criteria: Prisma.UserFindUniqueArgs,
-  options: GetUserOptions = {},
-): Promise<User> {
+export interface UserSummary {
+  id: string;
+  username: string;
+  role: string;
+  createdAt: Date;
+  twoFactorRequired: boolean;
+  _count?: {
+    websites: number;
+  };
+}
+
+async function findUser(criteria: Prisma.UserFindUniqueArgs, options: GetUserOptions = {}) {
   const { includePassword = false, showDeleted = false } = options;
 
   return prisma.client.user.findUnique({
     ...criteria,
     where: {
       ...criteria.where,
-      ...(showDeleted && { deletedAt: null }),
+      ...(showDeleted ? {} : { deletedAt: null }),
     },
     select: {
       id: true,
@@ -28,6 +41,7 @@ async function findUser(
       password: includePassword,
       role: true,
       createdAt: true,
+      twoFactorRequired: true,
     },
   });
 }
@@ -44,14 +58,18 @@ export async function getUser(userId: string, options: GetUserOptions = {}) {
 }
 
 export async function getUserByUsername(username: string, options: GetUserOptions = {}) {
-  return findUser({ where: { username } }, options);
+  return findUser({ where: { username: username.toLowerCase() } }, options);
 }
 
 export async function getUsers(
   criteria: UserFindManyArgs,
-  pageParams?: PageParams,
-): Promise<PageResult<User[]>> {
-  const { search } = pageParams;
+  filters: QueryFilters = {},
+): Promise<PageResult<UserSummary[]>> {
+  const sortFilters = sanitizeSortFilters(filters, USER_SORT_FIELDS, {
+    orderBy: 'createdAt',
+    sortDescending: true,
+  });
+  const { search } = sortFilters;
 
   const where: Prisma.UserWhereInput = {
     ...criteria.where,
@@ -65,11 +83,7 @@ export async function getUsers(
       ...criteria,
       where,
     },
-    {
-      orderBy: 'createdAt',
-      sortDescending: true,
-      ...pageParams,
-    },
+    sortFilters,
   );
 }
 
@@ -78,11 +92,7 @@ export async function createUser(data: {
   username: string;
   password: string;
   role: Role;
-}): Promise<{
-  id: string;
-  username: string;
-  role: string;
-}> {
+}) {
   return prisma.client.user.create({
     data,
     select: {
@@ -93,7 +103,7 @@ export async function createUser(data: {
   });
 }
 
-export async function updateUser(userId: string, data: Prisma.UserUpdateInput): Promise<User> {
+export async function updateUser(userId: string, data: Prisma.UserUpdateInput) {
   return prisma.client.user.update({
     where: {
       id: userId,
@@ -108,21 +118,9 @@ export async function updateUser(userId: string, data: Prisma.UserUpdateInput): 
   });
 }
 
-export async function deleteUser(
-  userId: string,
-): Promise<
-  [
-    Prisma.BatchPayload,
-    Prisma.BatchPayload,
-    Prisma.BatchPayload,
-    Prisma.BatchPayload,
-    Prisma.BatchPayload,
-    Prisma.BatchPayload,
-    User,
-  ]
-> {
+export async function deleteUser(userId: string) {
   const { client, transaction } = prisma;
-  const cloudMode = process.env.CLOUD_MODE;
+  const cloudMode = !!process.env.CLOUD_MODE;
 
   const websites = await client.website.findMany({
     where: { userId },
@@ -136,7 +134,7 @@ export async function deleteUser(
 
   const teams = await client.team.findMany({
     where: {
-      teamUser: {
+      members: {
         some: {
           userId,
           role: ROLES.teamOwner,
@@ -146,6 +144,33 @@ export async function deleteUser(
   });
 
   const teamIds = teams.map(a => a.id);
+
+  const ownedFilter = cloudMode ? { userId } : { OR: [{ userId }, { teamId: { in: teamIds } }] };
+
+  const [links, pixels, boards] = await Promise.all([
+    client.link.findMany({
+      where: ownedFilter,
+      select: { id: true, slug: true, deletedAt: true },
+    }),
+    client.pixel.findMany({
+      where: ownedFilter,
+      select: { id: true, slug: true, deletedAt: true },
+    }),
+    client.board.findMany({ where: ownedFilter, select: { id: true } }),
+  ]);
+  const entityIds = [...links.map(l => l.id), ...pixels.map(p => p.id), ...boards.map(b => b.id)];
+  // Only invalidate Redis cache for slugs that are still live (not already soft-deleted).
+  const linkSlugs = links.filter(l => !l.deletedAt).map(l => l.slug);
+  const pixelSlugs = pixels.filter(p => !p.deletedAt).map(p => p.slug);
+
+  const invalidateRedis = async () => {
+    if (redis.enabled && (linkSlugs.length || pixelSlugs.length)) {
+      await Promise.all([
+        ...linkSlugs.map(slug => redis.client.del(`link:${slug}`)),
+        ...pixelSlugs.map(slug => redis.client.del(`pixel:${slug}`)),
+      ]);
+    }
+  };
 
   if (cloudMode) {
     return transaction([
@@ -164,7 +189,21 @@ export async function deleteUser(
           id: userId,
         },
       }),
-    ]);
+      client.share.deleteMany({ where: { entityId: { in: entityIds } } }),
+      // deletedAt: null avoids restamping rows that were already soft-deleted earlier.
+      client.link.updateMany({
+        data: { deletedAt: new Date() },
+        where: { userId, deletedAt: null },
+      }),
+      client.pixel.updateMany({
+        data: { deletedAt: new Date() },
+        where: { userId, deletedAt: null },
+      }),
+      client.board.deleteMany({ where: { userId } }),
+    ]).then(async result => {
+      await invalidateRedis();
+      return result;
+    });
   }
 
   return transaction([
@@ -215,6 +254,10 @@ export async function deleteUser(
         ],
       },
     }),
+    client.share.deleteMany({ where: { entityId: { in: entityIds } } }),
+    client.link.deleteMany({ where: ownedFilter }),
+    client.pixel.deleteMany({ where: ownedFilter }),
+    client.board.deleteMany({ where: ownedFilter }),
     client.website.deleteMany({
       where: { id: { in: websiteIds } },
     }),
@@ -223,5 +266,8 @@ export async function deleteUser(
         id: userId,
       },
     }),
-  ]);
+  ]).then(async result => {
+    await invalidateRedis();
+    return result;
+  });
 }

@@ -1,21 +1,25 @@
-import path from 'path';
+import path from 'node:path';
 import { browserName, detectOS } from 'detect-browser';
-import isLocalhost from 'is-localhost-ip';
 import ipaddr from 'ipaddr.js';
+import isLocalhost from 'is-localhost-ip';
 import maxmind from 'maxmind';
-import {
-  DESKTOP_OS,
-  DESKTOP_SCREEN_WIDTH,
-  IP_ADDRESS_HEADERS,
-  LAPTOP_SCREEN_WIDTH,
-  MOBILE_OS,
-  MOBILE_SCREEN_WIDTH,
-} from './constants';
+import { UAParser } from 'ua-parser-js';
+import { getIpAddress, stripPort } from '@/lib/ip';
 import { safeDecodeURIComponent } from '@/lib/url';
 
 const MAXMIND = 'maxmind';
 
 const PROVIDER_HEADERS = [
+  // Umami custom headers (cloud mode only)
+  ...(process.env.CLOUD_MODE
+    ? [
+        {
+          countryHeader: 'x-umami-client-country',
+          regionHeader: 'x-umami-client-region',
+          cityHeader: 'x-umami-client-city',
+        },
+      ]
+    : []),
   // Cloudflare headers
   {
     countryHeader: 'cf-ipcountry',
@@ -34,62 +38,26 @@ const PROVIDER_HEADERS = [
     regionHeader: 'cloudfront-viewer-country-region',
     cityHeader: 'cloudfront-viewer-city',
   },
+  // EdgeOne headers (requires custom request headers in Rule Priorities, see: https://edgeone.ai/document/46151)
+  {
+    countryHeader: 'eo-ipcountry',
+    regionHeader: 'eo-region-code',
+    cityHeader: 'eo-ipcity',
+  },
 ];
 
-export function getIpAddress(headers: Headers) {
-  const customHeader = process.env.CLIENT_IP_HEADER;
-
-  if (customHeader && headers.get(customHeader)) {
-    return headers.get(customHeader);
-  }
-
-  const header = IP_ADDRESS_HEADERS.find(name => {
-    return headers.get(name);
-  });
-
-  const ip = headers.get(header);
-
-  if (header === 'x-forwarded-for') {
-    return ip?.split(',')?.[0]?.trim();
-  }
-
-  if (header === 'forwarded') {
-    const match = ip.match(/for=(\[?[0-9a-fA-F:.]+\]?)/);
-
-    if (match) {
-      return match[1];
-    }
-  }
-
-  return ip;
-}
-
-export function getDevice(screen: string, os: string) {
-  if (!screen) return;
+export function getDevice(userAgent: string, screen: string = '') {
+  const { device } = UAParser(userAgent);
 
   const [width] = screen.split('x');
 
-  if (DESKTOP_OS.includes(os)) {
-    if (os === 'Chrome OS' || +width < DESKTOP_SCREEN_WIDTH) {
-      return 'laptop';
-    }
-    return 'desktop';
-  } else if (MOBILE_OS.includes(os)) {
-    if (os === 'Amazon OS' || +width > MOBILE_SCREEN_WIDTH) {
-      return 'tablet';
-    }
-    return 'mobile';
+  const type = device?.type || 'desktop';
+
+  if (type === 'desktop' && screen && +width <= 1920) {
+    return 'laptop';
   }
 
-  if (+width >= DESKTOP_SCREEN_WIDTH) {
-    return 'desktop';
-  } else if (+width >= LAPTOP_SCREEN_WIDTH) {
-    return 'laptop';
-  } else if (+width >= MOBILE_SCREEN_WIDTH) {
-    return 'tablet';
-  } else {
-    return 'mobile';
-  }
+  return type;
 }
 
 function getRegionCode(country: string, region: string) {
@@ -108,21 +76,23 @@ function decodeHeader(s: string | undefined | null): string | undefined | null {
   return Buffer.from(s, 'latin1').toString('utf-8');
 }
 
-function removePortFromIP(ip: string = "") {
-  const split = ip.split(":");
-
-  // Assuming ip is a valid IPv4/IPv6 address, 3 colons is the minumum for IPv6
-  const ipv4 = split.length - 1 < 3;
-  return ipv4 ? split[0] : ip;
+async function isLocalIp(ip: string) {
+  try {
+    return await isLocalhost(ip);
+  } catch {
+    return false;
+  }
 }
 
-export async function getLocation(ip: string = '', headers: Headers, hasPayloadIP: boolean) {
-  // Ignore local ips
-  if (await isLocalhost(ip)) {
-    return;
+export async function getLocation(ip: string = '', headers: Headers, skipHeaders: boolean) {
+  const cleanIp = stripPort(ip);
+
+  // Ignore local or invalid ips
+  if (!cleanIp || !ipaddr.isValid(cleanIp) || (await isLocalIp(cleanIp))) {
+    return null;
   }
 
-  if (!hasPayloadIP && !process.env.SKIP_LOCATION_HEADERS) {
+  if (!skipHeaders && !process.env.SKIP_LOCATION_HEADERS) {
     for (const provider of PROVIDER_HEADERS) {
       const countryHeader = headers.get(provider.countryHeader);
       if (countryHeader) {
@@ -140,17 +110,15 @@ export async function getLocation(ip: string = '', headers: Headers, hasPayloadI
   }
 
   // Database lookup
-  if (!global[MAXMIND]) {
+  if (!globalThis[MAXMIND]) {
     const dir = path.join(process.cwd(), 'geo');
 
-    global[MAXMIND] = await maxmind.open(
+    globalThis[MAXMIND] = await maxmind.open(
       process.env.GEOLITE_DB_PATH || path.resolve(dir, 'GeoLite2-City.mmdb'),
     );
   }
 
-  // When the client IP is extracted from headers, sometimes the value includes a port
-  const cleanIp = removePortFromIP(ip);
-  const result = global[MAXMIND].get(cleanIp);
+  const result = globalThis[MAXMIND]?.get(cleanIp);
 
   if (result) {
     const country = result.country?.iso_code ?? result?.registered_country?.iso_code;
@@ -172,9 +140,9 @@ export async function getClientInfo(request: Request, payload: Record<string, an
   const country = safeDecodeURIComponent(location?.country);
   const region = safeDecodeURIComponent(location?.region);
   const city = safeDecodeURIComponent(location?.city);
-  const browser = browserName(userAgent);
-  const os = detectOS(userAgent) as string;
-  const device = getDevice(payload?.screen, os);
+  const browser = payload?.browser ?? browserName(userAgent);
+  const os = payload?.os ?? (detectOS(userAgent) as string);
+  const device = payload?.device ?? getDevice(userAgent, payload?.screen);
 
   return { userAgent, browser, os, ip, country, region, city, device };
 }
@@ -182,29 +150,31 @@ export async function getClientInfo(request: Request, payload: Record<string, an
 export function hasBlockedIp(clientIp: string) {
   const ignoreIps = process.env.IGNORE_IP;
 
-  if (ignoreIps) {
-    const ips = [];
+  if (!clientIp || !ignoreIps) {
+    return false;
+  }
 
-    if (ignoreIps) {
-      ips.push(...ignoreIps.split(',').map(n => n.trim()));
+  const ips = ignoreIps.split(',').map(n => n.trim());
+
+  return ips.some(ip => {
+    if (ip === clientIp) {
+      return true;
     }
 
-    return ips.find(ip => {
-      if (ip === clientIp) {
-        return true;
-      }
-
-      // CIDR notation
-      if (ip.indexOf('/') > 0) {
+    // CIDR notation
+    if (ip.indexOf('/') > 0) {
+      try {
         const addr = ipaddr.parse(clientIp);
         const range = ipaddr.parseCIDR(ip);
 
         if (addr.kind() === range[0].kind() && addr.match(range)) {
           return true;
         }
+      } catch {
+        // Ignore parsing errors
       }
-    });
-  }
+    }
 
-  return false;
+    return false;
+  });
 }

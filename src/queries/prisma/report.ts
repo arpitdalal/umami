@@ -1,13 +1,21 @@
-import { Prisma, Report } from '@prisma/client';
+import { Prisma, type Report } from '@/generated/prisma/client';
 import prisma from '@/lib/prisma';
-import { PageResult, PageParams } from '@/lib/types';
+import type { PageResult, QueryFilters } from '@/lib/types';
+
 import ReportFindManyArgs = Prisma.ReportFindManyArgs;
 
-async function findReport(criteria: Prisma.ReportFindUniqueArgs): Promise<Report> {
+export type ReportListItem = Report & {
+  website?: {
+    domain: string;
+    userId: string;
+  } | null;
+};
+
+async function findReport(criteria: Prisma.ReportFindUniqueArgs) {
   return prisma.client.report.findUnique(criteria);
 }
 
-export async function getReport(reportId: string): Promise<Report> {
+export async function getReport(reportId: string) {
   return findReport({
     where: {
       id: reportId,
@@ -17,9 +25,10 @@ export async function getReport(reportId: string): Promise<Report> {
 
 export async function getReports(
   criteria: ReportFindManyArgs,
-  pageParams: PageParams = {},
-): Promise<PageResult<Report[]>> {
-  const { search } = pageParams;
+  filters: QueryFilters = {},
+): Promise<PageResult<ReportListItem[]>> {
+  const { search } = filters;
+  const orderBy = criteria.orderBy ?? [{ name: 'asc' }, { id: 'asc' }];
 
   const where: Prisma.ReportWhereInput = {
     ...criteria.where,
@@ -45,13 +54,10 @@ export async function getReports(
     ]),
   };
 
-  return prisma.pagedQuery('report', { ...criteria, where }, pageParams);
+  return prisma.pagedQuery('report', { ...criteria, where, orderBy }, filters);
 }
 
-export async function getUserReports(
-  userId: string,
-  filters?: PageParams,
-): Promise<PageResult<Report[]>> {
+export async function getUserReports(userId: string, filters?: QueryFilters) {
   return getReports(
     {
       where: {
@@ -70,10 +76,7 @@ export async function getUserReports(
   );
 }
 
-export async function getWebsiteReports(
-  websiteId: string,
-  filters: PageParams = {},
-): Promise<PageResult<Report[]>> {
+export async function getWebsiteReports(websiteId: string, filters: QueryFilters = {}) {
   return getReports(
     {
       where: {
@@ -84,17 +87,14 @@ export async function getWebsiteReports(
   );
 }
 
-export async function createReport(data: Prisma.ReportUncheckedCreateInput): Promise<Report> {
+export async function createReport(data: Prisma.ReportUncheckedCreateInput) {
   return prisma.client.report.create({ data });
 }
 
-export async function updateReport(
-  reportId: string,
-  data: Prisma.ReportUpdateInput,
-): Promise<Report> {
+export async function updateReport(reportId: string, data: any) {
   return prisma.client.report.update({ where: { id: reportId }, data });
 }
 
-export async function deleteReport(reportId: string): Promise<Report> {
+export async function deleteReport(reportId: string) {
   return prisma.client.report.delete({ where: { id: reportId } });
 }

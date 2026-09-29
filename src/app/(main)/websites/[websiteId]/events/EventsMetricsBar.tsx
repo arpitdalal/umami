@@ -1,42 +1,70 @@
-import { useMessages } from '@/components/hooks';
-import useWebsiteSessionStats from '@/components/hooks/queries/useWebsiteSessionStats';
-import WebsiteDateFilter from '@/components/input/WebsiteDateFilter';
-import MetricCard from '@/components/metrics/MetricCard';
-import MetricsBar from '@/components/metrics/MetricsBar';
+import { LoadingPanel } from '@/components/common/LoadingPanel';
+import { useDateRange, useMessages } from '@/components/hooks';
+import { useEventStatsQuery } from '@/components/hooks/queries/useEventStatsQuery';
+import { MetricCard } from '@/components/metrics/MetricCard';
+import { MetricsBar } from '@/components/metrics/MetricsBar';
 import { formatLongNumber } from '@/lib/format';
-import { Flexbox } from 'react-basics';
 
 export function EventsMetricsBar({ websiteId }: { websiteId: string }) {
-  const { formatMessage, labels } = useMessages();
-  const { data, isLoading, isFetched, error } = useWebsiteSessionStats(websiteId);
+  const { isAllTime } = useDateRange();
+  const { t, labels, getErrorMessage } = useMessages();
+  const { data, isLoading, isFetching, error } = useEventStatsQuery({
+    websiteId,
+  });
+
+  const { events, visitors, visits, uniqueEvents, comparison } = data || {};
+
+  const metrics = data
+    ? [
+        {
+          value: visitors,
+          label: t(labels.visitors),
+          change: visitors - comparison.visitors,
+          formatValue: formatLongNumber,
+        },
+        {
+          value: visits,
+          label: t(labels.visits),
+          change: visits - comparison.visits,
+          formatValue: formatLongNumber,
+        },
+        {
+          value: events,
+          label: t(labels.events),
+          change: events - comparison.events,
+          formatValue: formatLongNumber,
+        },
+        {
+          value: uniqueEvents,
+          label: t(labels.uniqueEvents),
+          change: uniqueEvents - comparison.uniqueEvents,
+          formatValue: formatLongNumber,
+        },
+      ]
+    : null;
 
   return (
-    <Flexbox direction="row" justifyContent="space-between" style={{ minHeight: 120 }}>
-      <MetricsBar isLoading={isLoading} isFetched={isFetched} error={error}>
-        <MetricCard
-          value={data?.visitors?.value}
-          label={formatMessage(labels.visitors)}
-          formatValue={formatLongNumber}
-        />
-        <MetricCard
-          value={data?.visits?.value}
-          label={formatMessage(labels.visits)}
-          formatValue={formatLongNumber}
-        />
-        <MetricCard
-          value={data?.pageviews?.value}
-          label={formatMessage(labels.views)}
-          formatValue={formatLongNumber}
-        />
-        <MetricCard
-          value={data?.events?.value}
-          label={formatMessage(labels.events)}
-          formatValue={formatLongNumber}
-        />
+    <LoadingPanel
+      data={metrics}
+      isLoading={isLoading}
+      isFetching={isFetching}
+      error={getErrorMessage(error)}
+      minHeight="136px"
+    >
+      <MetricsBar>
+        {metrics?.map(({ label, value, change, formatValue }) => {
+          return (
+            <MetricCard
+              key={label}
+              value={value}
+              label={label}
+              change={change}
+              formatValue={formatValue}
+              showChange={!isAllTime}
+            />
+          );
+        })}
       </MetricsBar>
-      <WebsiteDateFilter websiteId={websiteId} />
-    </Flexbox>
+    </LoadingPanel>
   );
 }
-
-export default EventsMetricsBar;

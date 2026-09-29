@@ -1,23 +1,26 @@
 export const PRISMA = 'prisma';
 export const POSTGRESQL = 'postgresql';
-export const MYSQL = 'mysql';
 export const CLICKHOUSE = 'clickhouse';
 export const KAFKA = 'kafka';
 export const KAFKA_PRODUCER = 'kafka-producer';
 
 // Fixes issue with converting bigint values
-BigInt.prototype['toJSON'] = function () {
+(BigInt.prototype as unknown as { toJSON(): number }).toJSON = function () {
   return Number(this);
 };
 
 export function getDatabaseType(url = process.env.DATABASE_URL) {
-  const type = url && url.split(':')[0];
+  const type = url?.split(':')[0];
 
   if (type === 'postgres') {
     return POSTGRESQL;
   }
 
   return type;
+}
+
+export function isRelationalOnly() {
+  return !process.env.CLICKHOUSE_URL && getDatabaseType() === POSTGRESQL;
 }
 
 export async function runQuery(queries: any) {
@@ -31,7 +34,7 @@ export async function runQuery(queries: any) {
 
   const db = getDatabaseType();
 
-  if (db === POSTGRESQL || db === MYSQL) {
+  if (db === POSTGRESQL) {
     return queries[PRISMA]();
   }
 }
